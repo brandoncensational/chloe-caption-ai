@@ -1,7 +1,65 @@
+import os
 import streamlit as st
-from dotenv import load_dotenv
-load_dotenv()
 
+# ── Load secrets: Streamlit Cloud uses st.secrets, local uses .env ────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Pull API key from st.secrets (cloud) or environment (local)
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    try:
+        os.environ["ANTHROPIC_API_KEY"] = st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        pass
+
+# ── Password protection (optional) ────────────────────────────────────────────
+def _check_password():
+    try:
+        pwd = st.secrets.get("APP_PASSWORD", "")
+    except Exception:
+        pwd = os.environ.get("APP_PASSWORD", "")
+    if not pwd:
+        return True  # no password set — open access
+    if st.session_state.get("authenticated"):
+        return True
+    st.title("🔐 Chloe's Caption AI")
+    entered = st.text_input("Enter password", type="password")
+    if st.button("Login", type="primary"):
+        if entered == pwd:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    return False
+
+if not _check_password():
+    st.stop()
+
+# ── Google Drive: write credentials from secrets to temp files on cloud ───────
+def _setup_drive_from_secrets():
+    try:
+        creds_json = st.secrets.get("GOOGLE_DRIVE_CREDENTIALS", "")
+        token_json = st.secrets.get("GOOGLE_DRIVE_TOKEN", "")
+    except Exception:
+        creds_json = os.environ.get("GOOGLE_DRIVE_CREDENTIALS", "")
+        token_json = os.environ.get("GOOGLE_DRIVE_TOKEN", "")
+
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    os.makedirs(data_dir, exist_ok=True)
+
+    if creds_json and not os.path.exists(os.path.join(data_dir, "drive_credentials.json")):
+        with open(os.path.join(data_dir, "drive_credentials.json"), "w") as f:
+            f.write(creds_json)
+    if token_json and not os.path.exists(os.path.join(data_dir, "drive_token.json")):
+        with open(os.path.join(data_dir, "drive_token.json"), "w") as f:
+            f.write(token_json)
+
+_setup_drive_from_secrets()
+
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Chloe's Caption AI",
     page_icon="✨",

@@ -1,0 +1,23 @@
+# Secrets & credentials (NEVER commit these)
+.env
+.streamlit/secrets.toml
+data/drive_credentials.json
+data/drive_token.json
+
+# Local database (each deployment has its own)
+data/captions.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# OS
+.DS_Store
