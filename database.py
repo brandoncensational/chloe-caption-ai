@@ -1,0 +1,396 @@
+"""
+database.py — SQLite backend for Chloe's Caption AI
+Tables: clients, caption_examples, generation_history
+"""
+
+import sqlite3
+import os
+from datetime import datetime
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "data", "captions.db")
+
+
+def get_conn():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Create tables if they don't exist."""
+    with get_conn() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS clients (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL UNIQUE,
+                industry    TEXT,
+                brand_voice TEXT,
+                target_audience TEXT,
+                platforms   TEXT,
+                notes       TEXT,
+                created_at  TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS caption_examples (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                caption     TEXT    NOT NULL,
+                label       TEXT    NOT NULL CHECK(label IN ('good','bad','used')),
+                context     TEXT,          -- optional: what the post was about
+                platform    TEXT,          -- instagram, tiktok, facebook, etc.
+                engagement  TEXT,          -- optional: likes/comments if known
+                created_at  TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS generation_history (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id    INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                batch_desc   TEXT    NOT NULL,
+                platform     TEXT,
+                num_captions INTEGER,
+                captions_json TEXT,
+                created_at   TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS client_keywords (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                keyword     TEXT    NOT NULL,
+                category    TEXT    DEFAULT 'general',
+                priority    TEXT    DEFAULT 'normal' CHECK(priority IN ('high','normal','low')),
+                use_count   INTEGER DEFAULT 0,
+                last_used   TEXT,
+                created_at  TEXT    DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(client_id, keyword)
+            );
+
+            CREATE TABLE IF NOT EXISTS keyword_usage_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id     INTEGER NOT NULL,
+                keyword_id    INTEGER NOT NULL REFERENCES client_keywords(id) ON DELETE CASCADE,
+                generation_id INTEGER,
+                used_at       TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS caption_ratings (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+                caption_text    TEXT    NOT NULL,
+                hashtags        TEXT    DEFAULT \'\',
+                platform        TEXT    DEFAULT \'\',
+                batch_desc      TEXT    DEFAULT \'\',
+                rating          INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                saved_as        TEXT,
+                notes           TEXT,
+                created_at      TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+
+# ── Client Operations ─────────────────────────────────────────────────────────
+
+def add_client(name, industry="", brand_voice="", target_audience="", platforms="", notes=""):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO clients (name, industry, brand_voice, target_audience, platforms, notes) VALUES (?,?,?,?,?,?)",
+            (name, industry, brand_voice, target_audience, platforms, notes)
+        )
+
+
+def get_clients():
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY name")]
+
+
+def get_client(client_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_client(client_id, **kwargs):
+    allowed = {"name","industry","brand_voice","target_audience","platforms","notes"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    values = list(fields.values()) + [client_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE clients SET {set_clause} WHERE id=?", values)
+
+
+def delete_client(client_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM clients WHERE id=?", (client_id,))
+
+
+# ── Caption Example Operations ───────────────────────────────────────────────
+
+def add_example(client_id, caption, label, context="", platform="", engagement=""):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO caption_examples (client_id, caption, label, context, platform, engagement) VALUES (?,?,?,?,?,?)",
+            (client_id, caption, label, context, platform, engagement)
+        )
+
+
+def get_examples(client_id, label=None):
+    with get_conn() as conn:
+        if label:
+            rows = conn.execute(
+                "SELECT * FROM caption_examples WHERE client_id=? AND label=? ORDER BY created_at DESC",
+                (client_id, label)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM caption_examples WHERE client_id=? ORDER BY label, created_at DESC",
+                (client_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_example(example_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM caption_examples WHERE id=?", (example_id,))
+
+
+def get_example_counts(client_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT label, COUNT(*) as cnt FROM caption_examples WHERE client_id=? GROUP BY label",
+            (client_id,)
+        ).fetchall()
+        return {r["label"]: r["cnt"] for r in rows}
+
+
+# ── Generation History ───────────────────────────────────────────────────────
+
+def save_generation(client_id, batch_desc, platform, num_captions, captions_json):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO generation_history (client_id, batch_desc, platform, num_captions, captions_json) VALUES (?,?,?,?,?)",
+            (client_id, batch_desc, platform, num_captions, captions_json)
+        )
+
+
+def get_history(client_id, limit=20):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM generation_history WHERE client_id=? ORDER BY created_at DESC LIMIT ?",
+            (client_id, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_stats():
+    with get_conn() as conn:
+        stats = {}
+        stats["total_clients"] = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+        stats["total_examples"] = conn.execute("SELECT COUNT(*) FROM caption_examples").fetchone()[0]
+        stats["total_generated"] = conn.execute("SELECT COALESCE(SUM(num_captions),0) FROM generation_history").fetchone()[0]
+        stats["recent_generations"] = conn.execute(
+            "SELECT g.*, c.name as client_name FROM generation_history g JOIN clients c ON g.client_id=c.id ORDER BY g.created_at DESC LIMIT 5"
+        ).fetchall()
+        return stats
+
+# ── Keyword Operations ────────────────────────────────────────────────────────
+
+def add_keyword(client_id, keyword, category="general", priority="normal"):
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO client_keywords (client_id, keyword, category, priority) VALUES (?,?,?,?)",
+                (client_id, keyword.strip(), category, priority)
+            )
+            return True
+        except sqlite3.IntegrityError:
+            return False  # duplicate
+
+
+def add_keywords_bulk(client_id, keywords: list, category="general", priority="normal"):
+    added, skipped = 0, 0
+    for kw in keywords:
+        if kw.strip():
+            success = add_keyword(client_id, kw.strip(), category, priority)
+            if success:
+                added += 1
+            else:
+                skipped += 1
+    return added, skipped
+
+
+def get_keywords(client_id, category=None):
+    with get_conn() as conn:
+        if category:
+            rows = conn.execute(
+                "SELECT * FROM client_keywords WHERE client_id=? AND category=? ORDER BY priority DESC, keyword",
+                (client_id, category)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM client_keywords WHERE client_id=? ORDER BY category, priority DESC, keyword",
+                (client_id,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_keywords_for_generation(client_id, num_captions=5):
+    """Smart keyword selection — rotates by least recently used to minimize repetition."""
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM client_keywords
+            WHERE client_id=?
+            ORDER BY
+                CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+                COALESCE(last_used, '1970-01-01') ASC,
+                use_count ASC
+        """, (client_id,)).fetchall()
+
+    keywords = [dict(r) for r in rows]
+    result = {"always": [], "rotate": [], "occasional": [], "all": keywords}
+    for kw in keywords:
+        if kw["priority"] == "high":
+            result["always"].append(kw["keyword"])
+        elif kw["priority"] == "normal":
+            result["rotate"].append(kw["keyword"])
+        else:
+            result["occasional"].append(kw["keyword"])
+    return result
+
+
+def record_keyword_usage(client_id, keyword, generation_id=None):
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE client_keywords
+            SET use_count = use_count + 1, last_used = CURRENT_TIMESTAMP
+            WHERE client_id=? AND keyword=?
+        """, (client_id, keyword))
+        row = conn.execute(
+            "SELECT id FROM client_keywords WHERE client_id=? AND keyword=?",
+            (client_id, keyword)
+        ).fetchone()
+        if row:
+            conn.execute(
+                "INSERT INTO keyword_usage_log (client_id, keyword_id, generation_id) VALUES (?,?,?)",
+                (client_id, row["id"], generation_id)
+            )
+
+
+def update_keyword(keyword_id, **kwargs):
+    allowed = {"keyword", "category", "priority"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    values = list(fields.values()) + [keyword_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE client_keywords SET {set_clause} WHERE id=?", values)
+
+
+def delete_keyword(keyword_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM client_keywords WHERE id=?", (keyword_id,))
+
+
+def get_keyword_stats(client_id):
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT k.keyword, k.category, k.priority, k.use_count, k.last_used,
+                   COUNT(l.id) as recent_uses
+            FROM client_keywords k
+            LEFT JOIN keyword_usage_log l ON l.keyword_id = k.id
+                AND l.used_at >= datetime('now', '-30 days')
+            WHERE k.client_id=?
+            GROUP BY k.id
+            ORDER BY k.use_count DESC
+        """, (client_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+# ── Caption Rating Operations ─────────────────────────────────────────────────
+
+def save_rating(client_id, caption_text, rating, hashtags="", platform="",
+                batch_desc="", notes="", saved_as=None):
+    """Save a star rating (1-5) for a generated caption."""
+    with get_conn() as conn:
+        conn.execute("""
+            INSERT INTO caption_ratings
+                (client_id, caption_text, hashtags, platform, batch_desc, rating, notes, saved_as)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (client_id, caption_text, hashtags, platform, batch_desc, rating, notes, saved_as))
+
+
+def update_rating_saved_as(client_id, caption_text, saved_as):
+    """Mark a rating record as saved to examples (good/bad)."""
+    with get_conn() as conn:
+        conn.execute("""
+            UPDATE caption_ratings SET saved_as=?
+            WHERE client_id=? AND caption_text=?
+        """, (saved_as, client_id, caption_text))
+
+
+def get_ratings(client_id, limit=50):
+    """Get all ratings for a client, newest first."""
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT * FROM caption_ratings
+            WHERE client_id=?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (client_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_rating_stats(client_id):
+    """Aggregate rating stats for a client."""
+    with get_conn() as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(*)                            as total,
+                ROUND(AVG(rating), 2)               as avg_rating,
+                SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END) as high_rated,
+                SUM(CASE WHEN rating <= 2 THEN 1 ELSE 0 END) as low_rated,
+                SUM(CASE WHEN saved_as='good' THEN 1 ELSE 0 END) as saved_good,
+                SUM(CASE WHEN saved_as='bad'  THEN 1 ELSE 0 END) as saved_bad
+            FROM caption_ratings WHERE client_id=?
+        """, (client_id,)).fetchone()
+        return dict(row) if row else {}
+
+# ── Posting Schedule Operations ───────────────────────────────────────────────
+
+def save_posting_schedule(client_id, schedule_json):
+    """Save or update a client's posting schedule (JSON string)."""
+    with get_conn() as conn:
+        # Add column if it doesn't exist yet (safe migration)
+        try:
+            conn.execute("ALTER TABLE clients ADD COLUMN posting_schedule TEXT")
+        except Exception:
+            pass  # column already exists
+        conn.execute(
+            "UPDATE clients SET posting_schedule=? WHERE id=?",
+            (schedule_json, client_id)
+        )
+
+
+def get_posting_schedule(client_id):
+    """Return parsed posting schedule dict or empty default."""
+    import json
+    with get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT posting_schedule FROM clients WHERE id=?", (client_id,)
+            ).fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+        except Exception:
+            pass
+    return {"post_types": [], "total_monthly": 0, "notes": "", "proposal": ""}
+
+
+def relabel_example(example_id, new_label):
+    """Change a caption example's label (good / bad / used)."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE caption_examples SET label=? WHERE id=?",
+            (new_label, example_id)
+        )
