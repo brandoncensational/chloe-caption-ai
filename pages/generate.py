@@ -20,6 +20,13 @@ STAR_OPTIONS = {
 }
 
 
+def _get_user_clients():
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
+
+
 def encode_image(uploaded_file):
     data = uploaded_file.read()
     b64 = base64.standard_b64encode(data).decode("utf-8")
@@ -33,9 +40,9 @@ def star_display(rating):
 def show():
     st.title("🚀 Generate Captions")
 
-    clients = get_clients()
+    clients = _get_user_clients()
     if not clients:
-        st.warning("No clients yet. Go to **Client Management** to add one first.")
+        st.warning("No clients yet. Go to **Clients** to add one first.")
         return
 
     client_map = {c["name"]: c for c in clients}
@@ -56,7 +63,7 @@ def show():
         st.caption(f"{badge_color} AI Readiness: {min(readiness_pct, 100)}%")
 
     if total < 3:
-        st.warning("⚠️ Add at least 3 caption examples in **Caption Examples** for better results.")
+        st.warning("⚠️ Add at least 3 caption examples in **Examples** for better results.")
 
     st.divider()
 
@@ -115,7 +122,6 @@ def show():
                 st.session_state["last_client_id"] = client_id
                 st.session_state["last_platform"]  = platform
                 st.session_state["last_batch"]     = batch_desc
-                # Reset any existing ratings for new generation
                 st.session_state["ratings"] = {}
                 st.session_state["saved"]   = {}
 
@@ -153,7 +159,6 @@ def show():
         current_rating = st.session_state["ratings"].get(cap_key)
         already_saved  = st.session_state["saved"].get(cap_key)
 
-        # Header shows rating stars if already rated
         header = f"**Caption {i}**"
         if current_rating:
             header += f"  {star_display(current_rating)}"
@@ -162,8 +167,6 @@ def show():
             header += f"  {label_icon} Saved as {already_saved}"
 
         with st.expander(header, expanded=(i == 1)):
-
-            # Caption text
             st.markdown(caption_text)
             if hashtags:
                 st.markdown(f"`{hashtags}`")
@@ -174,7 +177,6 @@ def show():
 
             st.markdown("---")
 
-            # ── Rating row ────────────────────────────────────────────────
             col_rate, col_save, col_copy = st.columns([3, 3, 2])
 
             with col_rate:
@@ -206,7 +208,6 @@ def show():
             with col_save:
                 st.markdown("**Add to AI training:**")
 
-                # Auto-suggest based on rating
                 if current_rating:
                     if current_rating >= 4:
                         suggestion = "✅ Looks like a great example!"

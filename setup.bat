@@ -1,11 +1,11 @@
 @echo off
-title Chloe's Caption AI - First Time Setup
+title Censational Social Media Manager - First Time Setup
 
 cd /d "%~dp0"
 
 echo.
 echo  ============================================
-echo   Chloe's Caption AI - First Time Setup
+echo   Censational Social Media Manager - Setup
 echo  ============================================
 echo.
 

@@ -1,7 +1,7 @@
 @echo off
-title Chloe's Caption AI
+title Censational Social Media Manager
 
-:: ── Change this path to wherever you saved the chloe_ai folder ──────────────
+:: ── Change this path to wherever you saved the censational folder ──────────────
 set PROJECT_DIR=%~dp0
 
 :: Move into the project folder
@@ -19,9 +19,9 @@ if errorlevel 1 (
 
 :: Launch the app
 echo.
-echo  ✨  Starting Chloe's Caption AI...
-echo  ✨  Open your browser to: http://localhost:8501
-echo  ✨  Press Ctrl+C in this window to stop the app.
+echo  🚀  Starting Censational Social Media Manager...
+echo  🚀  Open your browser to: http://localhost:8501
+echo  🚀  Press Ctrl+C in this window to stop the app.
 echo.
 
 streamlit run app.py --server.headless false

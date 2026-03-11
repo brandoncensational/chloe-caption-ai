@@ -1,11 +1,11 @@
 @echo off
-title Chloe's Caption AI - Database Patch
+title Censational - Database Patch
 
 cd /d "%~dp0"
 
 echo.
 echo  ============================================
-echo   Chloe's Caption AI - Database Patch
+echo   Censational - Database Patch
 echo  ============================================
 echo.
 

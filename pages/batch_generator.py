@@ -19,6 +19,14 @@ from database import (
 )
 from caption_generator import plan_full_batch
 
+
+def _get_user_clients():
+    """Get clients scoped to the current user."""
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
+
 # ── Lazy imports ──────────────────────────────────────────────────────────────
 def _get_drive():
     try:
@@ -58,9 +66,9 @@ ACCOUNT_SHORT = {
 def show():
     st.title("📦 Content Batch Generator")
 
-    clients = get_clients()
+    clients = _get_user_clients()
     if not clients:
-        st.warning("No clients yet. Go to **Client Management** first.")
+        st.warning("No clients yet. Go to **Clients** first.")
         return
 
     client_map    = {c["name"]: c for c in clients}

@@ -1,4 +1,4 @@
-"""pages/clients.py — Add and manage clients including posting schedules."""
+"""pages/clients.py — Add and manage clients including posting schedules and website scanning."""
 
 import streamlit as st
 import json
@@ -17,6 +17,22 @@ POST_TYPE_PRESETS = {
     "Google Business Profile":  {"label": "Google Business Profile Post", "freq": 10, "notes": ""},
     "Custom":                   {"label": "",                "freq": 1, "notes": ""},
 }
+
+
+def _get_user_clients():
+    """Get clients scoped to the current user."""
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
+
+
+def _get_owner_id():
+    """Get the owner_id to assign when creating a new client."""
+    user = st.session_state.get("user", {})
+    if user.get("role") == "master":
+        return None  # Master-created clients are shared/global
+    return user.get("id")
 
 
 def schedule_editor(client_id, key_prefix=""):
@@ -89,28 +105,127 @@ def schedule_editor(client_id, key_prefix=""):
         st.success("✅ Posting schedule saved!")
 
 
+def _website_scanner_section():
+    """Website URL scanner widget for auto-populating brand data."""
+    st.markdown("#### 🌐 Scan Website for Brand Data")
+    st.caption(
+        "Paste your website URL and we'll automatically extract your brand voice, "
+        "colors, fonts, industry, and target audience using AI."
+    )
+
+    scan_url = st.text_input(
+        "Website URL",
+        placeholder="https://yourbusiness.com",
+        key="scan_url_input",
+    )
+
+    if st.button("🔍 Scan Website", key="scan_website_btn", type="primary"):
+        if not scan_url.strip():
+            st.error("Please enter a URL.")
+            return None
+
+        with st.spinner("🌐 Scanning website and analyzing brand..."):
+            try:
+                from website_scanner import scan_website
+                result = scan_website(scan_url.strip())
+                st.session_state["scan_result"] = result
+                st.success("✅ Website scanned successfully!")
+            except Exception as e:
+                st.error(f"Scan failed: {e}")
+                st.info("Make sure the URL is correct and the website is publicly accessible.")
+                return None
+
+    # Show scan results if available
+    result = st.session_state.get("scan_result")
+    if result:
+        st.markdown("---")
+        st.markdown("**📊 Scan Results** — review and edit before saving:")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown(f"**Business:** {result.get('business_name', 'N/A')}")
+            st.markdown(f"**Industry:** {result.get('industry', 'N/A')}")
+            if result.get("tagline"):
+                st.markdown(f"**Tagline:** _{result['tagline']}_")
+        with col_b:
+            colors = result.get("colors", [])
+            if colors:
+                color_html = " ".join(
+                    f'<span style="display:inline-block;width:24px;height:24px;'
+                    f'background:{c};border-radius:4px;margin:2px;border:1px solid #ccc;" '
+                    f'title="{c}"></span>'
+                    for c in colors[:6]
+                )
+                st.markdown(f"**Colors:** {color_html}", unsafe_allow_html=True)
+            fonts = result.get("fonts", [])
+            if fonts:
+                st.markdown(f"**Fonts:** {', '.join(fonts)}")
+
+        st.markdown("**Brand Voice (AI-analyzed):**")
+        st.info(result.get("brand_voice", "N/A"))
+
+        st.markdown("**Target Audience:**")
+        st.caption(result.get("target_audience", "N/A"))
+
+        if result.get("notes"):
+            st.markdown("**Additional Notes:**")
+            st.caption(result["notes"])
+
+        return result
+
+    return None
+
+
 def show():
     st.title("👤 Client Management")
 
-    clients = get_clients()
+    clients = _get_user_clients()
     tabs = st.tabs(["➕ Add New Client", "📋 Manage Existing Clients"])
 
     # ── Add New Client ─────────────────────────────────────────────────────────
     with tabs[0]:
         st.subheader("Add a New Client")
+
+        # Website scanner section
+        scan_result = _website_scanner_section()
+
+        st.markdown("---")
+
+        # Pre-fill form with scan results if available
+        sr = scan_result or {}
+        prefill_name = sr.get("business_name", "")
+        prefill_industry = sr.get("industry", "")
+        prefill_voice = sr.get("brand_voice", "")
+        prefill_audience = sr.get("target_audience", "")
+        prefill_notes = sr.get("notes", "")
+        prefill_platforms = sr.get("platforms_suggested", ["Instagram", "TikTok"])
+
+        # Validate platform names against our options
+        valid_prefill = [p for p in prefill_platforms if p in PLATFORM_OPTIONS]
+        if not valid_prefill:
+            valid_prefill = ["Instagram", "TikTok"]
+
         with st.form("add_client_form"):
-            name     = st.text_input("Client / Business Name *", placeholder="e.g. Katie Riedel – Calm Water")
-            industry = st.text_input("Industry", placeholder="e.g. Vacation Rentals, Glamping, Hospitality")
+            name     = st.text_input("Client / Business Name *",
+                                     value=prefill_name,
+                                     placeholder="e.g. Katie Riedel – Calm Water")
+            industry = st.text_input("Industry",
+                                     value=prefill_industry,
+                                     placeholder="e.g. Vacation Rentals, Glamping, Hospitality")
             brand_voice = st.text_area(
                 "Brand Voice & Tone",
-                placeholder="Describe how this brand speaks. e.g. 'Warm, inviting, nature-focused. Uses personal storytelling. Always encouraging guests to book and experience the river.'"
+                value=prefill_voice,
+                placeholder="Describe how this brand speaks. e.g. 'Warm, inviting, nature-focused.'"
             )
             target_audience = st.text_area(
                 "Target Audience",
-                placeholder="e.g. Couples and families seeking Texas Hill Country getaways. Fishing enthusiasts. Spring Break travelers."
+                value=prefill_audience,
+                placeholder="e.g. Couples and families seeking Texas Hill Country getaways."
             )
-            platforms = st.multiselect("Active Platforms", PLATFORM_OPTIONS, default=["Instagram", "TikTok"])
-            notes = st.text_area("Additional Notes", placeholder="Anything else the AI should know...")
+            platforms = st.multiselect("Active Platforms", PLATFORM_OPTIONS, default=valid_prefill)
+            notes = st.text_area("Additional Notes",
+                                 value=prefill_notes,
+                                 placeholder="Anything else the AI should know...")
             submitted = st.form_submit_button("Save Client", type="primary")
 
         if submitted:
@@ -125,8 +240,11 @@ def show():
                         target_audience=target_audience,
                         platforms=", ".join(platforms),
                         notes=notes,
+                        owner_id=_get_owner_id(),
                     )
                     st.success(f"✅ Client **{name}** added! You can now set up their posting schedule below.")
+                    # Clear scan result
+                    st.session_state.pop("scan_result", None)
                     st.rerun()
                 except Exception as e:
                     if "UNIQUE" in str(e):
@@ -153,7 +271,7 @@ def show():
                 header += f"  |  📅 {total_posts} posts/mo"
 
             with st.expander(header):
-                inner_tabs = st.tabs(["✏️ Profile", "📅 Posting Schedule"])
+                inner_tabs = st.tabs(["✏️ Profile", "📅 Posting Schedule", "🌐 Re-scan Website"])
 
                 # ── Profile tab ────────────────────────────────────────────────
                 with inner_tabs[0]:
@@ -191,3 +309,32 @@ def show():
                 # ── Schedule tab ───────────────────────────────────────────────
                 with inner_tabs[1]:
                     schedule_editor(client["id"], key_prefix=f"sched_{client['id']}")
+
+                # ── Re-scan Website tab ────────────────────────────────────────
+                with inner_tabs[2]:
+                    st.caption("Re-scan a website to update this client's brand data.")
+                    rescan_url = st.text_input(
+                        "Website URL",
+                        placeholder="https://yourbusiness.com",
+                        key=f"rescan_url_{client['id']}",
+                    )
+                    if st.button("🔍 Scan & Update", key=f"rescan_btn_{client['id']}"):
+                        if rescan_url.strip():
+                            with st.spinner("Scanning..."):
+                                try:
+                                    from website_scanner import scan_website
+                                    result = scan_website(rescan_url.strip())
+                                    # Update client with scanned data
+                                    update_client(
+                                        client["id"],
+                                        industry=result.get("industry", client.get("industry", "")),
+                                        brand_voice=result.get("brand_voice", client.get("brand_voice", "")),
+                                        target_audience=result.get("target_audience", client.get("target_audience", "")),
+                                        notes=result.get("notes", client.get("notes", "")),
+                                    )
+                                    st.success("✅ Client updated with scanned brand data!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Scan failed: {e}")
+                        else:
+                            st.error("Please enter a URL.")

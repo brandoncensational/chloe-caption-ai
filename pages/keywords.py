@@ -14,6 +14,13 @@ PRIORITY_LABELS = {
 }
 
 
+def _get_user_clients():
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
+
+
 def show():
     st.title("🔑 Brand Keywords")
     st.markdown(
@@ -22,9 +29,9 @@ def show():
         "high-priority words appear most often, low-priority ones only occasionally."
     )
 
-    clients = get_clients()
+    clients = _get_user_clients()
     if not clients:
-        st.warning("No clients yet. Add one in **Client Management** first.")
+        st.warning("No clients yet. Add one in **Clients** first.")
         return
 
     client_map = {c["name"]: c for c in clients}
@@ -98,7 +105,6 @@ def show():
                     st.info(f"⚠️ {skipped} keyword{'s' if skipped > 1 else ''} already existed and were skipped.")
                 st.rerun()
 
-        # Quick add tip
         with st.expander("💡 Tips for great keywords"):
             st.markdown("""
 **High priority** — Core brand words that define the business. Examples:
@@ -124,7 +130,6 @@ def show():
         if not keywords:
             st.info("No keywords yet. Add some in the **Add Keywords** tab.")
         else:
-            # Group by priority for cleaner display
             for priority_key, priority_label in [("high","🔴 High Priority"), ("normal","🟡 Normal Priority"), ("low","🟢 Low / Occasional")]:
                 group = [k for k in keywords if k["priority"] == priority_key]
                 if not group:
@@ -135,7 +140,6 @@ def show():
                     col_kw.markdown(f"**{kw['keyword']}**")
                     col_cat.caption(kw.get("category", "general"))
 
-                    # Inline priority change
                     new_pri = col_pri.selectbox(
                         "Priority",
                         ["high", "normal", "low"],

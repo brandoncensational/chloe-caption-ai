@@ -1,10 +1,11 @@
 """
-database.py — SQLite backend for Chloe's Caption AI
-Tables: clients, caption_examples, generation_history
+database.py — SQLite backend for Censational Social Media Manager
+Tables: users, clients, caption_examples, generation_history, client_keywords, keyword_usage_log, caption_ratings
 """
 
 import sqlite3
 import os
+import hashlib
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data", "captions.db")
@@ -21,6 +22,17 @@ def init_db():
     """Create tables if they don't exist."""
     with get_conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                email           TEXT    NOT NULL UNIQUE,
+                password_hash   TEXT    NOT NULL,
+                name            TEXT    NOT NULL,
+                role            TEXT    NOT NULL DEFAULT 'user' CHECK(role IN ('master','user')),
+                business_name   TEXT    DEFAULT '',
+                website_url     TEXT    DEFAULT '',
+                created_at      TEXT    DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS clients (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 name        TEXT    NOT NULL UNIQUE,
@@ -29,6 +41,7 @@ def init_db():
                 target_audience TEXT,
                 platforms   TEXT,
                 notes       TEXT,
+                owner_id    INTEGER DEFAULT NULL REFERENCES users(id),
                 created_at  TEXT    DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -37,9 +50,9 @@ def init_db():
                 client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
                 caption     TEXT    NOT NULL,
                 label       TEXT    NOT NULL CHECK(label IN ('good','bad','used')),
-                context     TEXT,          -- optional: what the post was about
-                platform    TEXT,          -- instagram, tiktok, facebook, etc.
-                engagement  TEXT,          -- optional: likes/comments if known
+                context     TEXT,
+                platform    TEXT,
+                engagement  TEXT,
                 created_at  TEXT    DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -77,9 +90,9 @@ def init_db():
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
                 caption_text    TEXT    NOT NULL,
-                hashtags        TEXT    DEFAULT \'\',
-                platform        TEXT    DEFAULT \'\',
-                batch_desc      TEXT    DEFAULT \'\',
+                hashtags        TEXT    DEFAULT '',
+                platform        TEXT    DEFAULT '',
+                batch_desc      TEXT    DEFAULT '',
                 rating          INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
                 saved_as        TEXT,
                 notes           TEXT,
@@ -87,19 +100,89 @@ def init_db():
             );
         """)
 
+        # Safe migration: add owner_id column to existing clients table if missing
+        try:
+            conn.execute("SELECT owner_id FROM clients LIMIT 1")
+        except Exception:
+            try:
+                conn.execute("ALTER TABLE clients ADD COLUMN owner_id INTEGER DEFAULT NULL REFERENCES users(id)")
+            except Exception:
+                pass
+
+
+# ── Password Hashing ─────────────────────────────────────────────────────────
+
+def hash_password(password: str) -> str:
+    """Hash a password using SHA-256 with a salt."""
+    salt = "censational_salt_2026"
+    return hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+
+
+# ── User Operations ──────────────────────────────────────────────────────────
+
+def create_user(email: str, password: str, name: str, role: str = "user",
+                business_name: str = "", website_url: str = ""):
+    """Create a new user account. Returns the user dict or raises on duplicate."""
+    pw_hash = hash_password(password)
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO users (email, password_hash, name, role, business_name, website_url)
+               VALUES (?,?,?,?,?,?)""",
+            (email.lower().strip(), pw_hash, name.strip(), role, business_name, website_url)
+        )
+        row = conn.execute("SELECT * FROM users WHERE email=?", (email.lower().strip(),)).fetchone()
+        return dict(row) if row else None
+
+
+def authenticate_user(email: str, password: str):
+    """Check email/password against the users table. Returns user dict or None."""
+    pw_hash = hash_password(password)
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email=? AND password_hash=?",
+            (email.lower().strip(), pw_hash)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_email(email: str):
+    """Look up a user by email."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE email=?", (email.lower().strip(),)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int):
+    """Look up a user by ID."""
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_all_users():
+    """Return all users (master-only function)."""
+    with get_conn() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM users ORDER BY created_at DESC")]
+
 
 # ── Client Operations ─────────────────────────────────────────────────────────
 
-def add_client(name, industry="", brand_voice="", target_audience="", platforms="", notes=""):
+def add_client(name, industry="", brand_voice="", target_audience="", platforms="", notes="", owner_id=None):
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO clients (name, industry, brand_voice, target_audience, platforms, notes) VALUES (?,?,?,?,?,?)",
-            (name, industry, brand_voice, target_audience, platforms, notes)
+            "INSERT INTO clients (name, industry, brand_voice, target_audience, platforms, notes, owner_id) VALUES (?,?,?,?,?,?,?)",
+            (name, industry, brand_voice, target_audience, platforms, notes, owner_id)
         )
 
 
-def get_clients():
+def get_clients(owner_id=None):
+    """Get clients. If owner_id is None, returns ALL clients (master mode).
+    If owner_id is set, returns only that user's clients."""
     with get_conn() as conn:
+        if owner_id is not None:
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM clients WHERE owner_id=? ORDER BY name", (owner_id,)
+            )]
         return [dict(r) for r in conn.execute("SELECT * FROM clients ORDER BY name")]
 
 
@@ -183,15 +266,36 @@ def get_history(client_id, limit=20):
         return [dict(r) for r in rows]
 
 
-def get_stats():
+def get_stats(owner_id=None):
+    """Get dashboard stats. If owner_id is set, scoped to that user's clients only."""
     with get_conn() as conn:
         stats = {}
-        stats["total_clients"] = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
-        stats["total_examples"] = conn.execute("SELECT COUNT(*) FROM caption_examples").fetchone()[0]
-        stats["total_generated"] = conn.execute("SELECT COALESCE(SUM(num_captions),0) FROM generation_history").fetchone()[0]
-        stats["recent_generations"] = conn.execute(
-            "SELECT g.*, c.name as client_name FROM generation_history g JOIN clients c ON g.client_id=c.id ORDER BY g.created_at DESC LIMIT 5"
-        ).fetchall()
+        if owner_id is not None:
+            stats["total_clients"] = conn.execute(
+                "SELECT COUNT(*) FROM clients WHERE owner_id=?", (owner_id,)
+            ).fetchone()[0]
+            stats["total_examples"] = conn.execute(
+                "SELECT COUNT(*) FROM caption_examples WHERE client_id IN (SELECT id FROM clients WHERE owner_id=?)",
+                (owner_id,)
+            ).fetchone()[0]
+            stats["total_generated"] = conn.execute(
+                "SELECT COALESCE(SUM(num_captions),0) FROM generation_history WHERE client_id IN (SELECT id FROM clients WHERE owner_id=?)",
+                (owner_id,)
+            ).fetchone()[0]
+            stats["recent_generations"] = conn.execute(
+                """SELECT g.*, c.name as client_name FROM generation_history g
+                   JOIN clients c ON g.client_id=c.id
+                   WHERE c.owner_id=?
+                   ORDER BY g.created_at DESC LIMIT 5""",
+                (owner_id,)
+            ).fetchall()
+        else:
+            stats["total_clients"] = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+            stats["total_examples"] = conn.execute("SELECT COUNT(*) FROM caption_examples").fetchone()[0]
+            stats["total_generated"] = conn.execute("SELECT COALESCE(SUM(num_captions),0) FROM generation_history").fetchone()[0]
+            stats["recent_generations"] = conn.execute(
+                "SELECT g.*, c.name as client_name FROM generation_history g JOIN clients c ON g.client_id=c.id ORDER BY g.created_at DESC LIMIT 5"
+            ).fetchall()
         return stats
 
 # ── Keyword Operations ────────────────────────────────────────────────────────
@@ -205,7 +309,7 @@ def add_keyword(client_id, keyword, category="general", priority="normal"):
             )
             return True
         except sqlite3.IntegrityError:
-            return False  # duplicate
+            return False
 
 
 def add_keywords_bulk(client_id, keywords: list, category="general", priority="normal"):
@@ -311,7 +415,6 @@ def get_keyword_stats(client_id):
 
 def save_rating(client_id, caption_text, rating, hashtags="", platform="",
                 batch_desc="", notes="", saved_as=None):
-    """Save a star rating (1-5) for a generated caption."""
     with get_conn() as conn:
         conn.execute("""
             INSERT INTO caption_ratings
@@ -321,7 +424,6 @@ def save_rating(client_id, caption_text, rating, hashtags="", platform="",
 
 
 def update_rating_saved_as(client_id, caption_text, saved_as):
-    """Mark a rating record as saved to examples (good/bad)."""
     with get_conn() as conn:
         conn.execute("""
             UPDATE caption_ratings SET saved_as=?
@@ -330,7 +432,6 @@ def update_rating_saved_as(client_id, caption_text, saved_as):
 
 
 def get_ratings(client_id, limit=50):
-    """Get all ratings for a client, newest first."""
     with get_conn() as conn:
         rows = conn.execute("""
             SELECT * FROM caption_ratings
@@ -342,7 +443,6 @@ def get_ratings(client_id, limit=50):
 
 
 def get_rating_stats(client_id):
-    """Aggregate rating stats for a client."""
     with get_conn() as conn:
         row = conn.execute("""
             SELECT
@@ -359,13 +459,11 @@ def get_rating_stats(client_id):
 # ── Posting Schedule Operations ───────────────────────────────────────────────
 
 def save_posting_schedule(client_id, schedule_json):
-    """Save or update a client's posting schedule (JSON string)."""
     with get_conn() as conn:
-        # Add column if it doesn't exist yet (safe migration)
         try:
             conn.execute("ALTER TABLE clients ADD COLUMN posting_schedule TEXT")
         except Exception:
-            pass  # column already exists
+            pass
         conn.execute(
             "UPDATE clients SET posting_schedule=? WHERE id=?",
             (schedule_json, client_id)
@@ -373,7 +471,6 @@ def save_posting_schedule(client_id, schedule_json):
 
 
 def get_posting_schedule(client_id):
-    """Return parsed posting schedule dict or empty default."""
     import json
     with get_conn() as conn:
         try:
@@ -388,7 +485,6 @@ def get_posting_schedule(client_id):
 
 
 def relabel_example(example_id, new_label):
-    """Change a caption example's label (good / bad / used)."""
     with get_conn() as conn:
         conn.execute(
             "UPDATE caption_examples SET label=? WHERE id=?",

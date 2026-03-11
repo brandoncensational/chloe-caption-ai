@@ -18,7 +18,7 @@ echo  4. Go to APIs and Services ^> Credentials
 echo  5. Create OAuth 2.0 Client ID ^> Desktop App
 echo  6. Download the JSON file
 echo  7. Rename it to: drive_credentials.json
-echo  8. Place it in the 'data' folder inside chloe_ai
+echo  8. Place it in the 'data' folder inside censational
 echo.
 echo  Then come back and press any key to continue...
 echo.

@@ -11,13 +11,20 @@ LABEL_INFO = {
 }
 
 
+def _get_user_clients():
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
+
+
 def show():
     st.title("📚 Caption Examples")
     st.markdown("These examples train the AI for each client. The more examples you add, the better the output.")
 
-    clients = get_clients()
+    clients = _get_user_clients()
     if not clients:
-        st.warning("No clients yet. Add one in **Client Management** first.")
+        st.warning("No clients yet. Add one in **Clients** first.")
         return
 
     client_names = {c["name"]: c["id"] for c in clients}

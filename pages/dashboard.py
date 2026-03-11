@@ -5,12 +5,27 @@ import json
 from database import get_stats, get_clients, get_example_counts, add_example
 
 
-def show():
-    st.title("✨ Dashboard")
-    st.markdown("Welcome back to **Chloe's Caption AI** — your social media automation hub.")
+def _get_user_clients():
+    if st.session_state.get("is_master"):
+        return get_clients()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_clients(owner_id=owner_id)
 
-    stats   = get_stats()
-    clients = get_clients()
+
+def _get_user_stats():
+    if st.session_state.get("is_master"):
+        return get_stats()
+    owner_id = st.session_state.get("user", {}).get("id")
+    return get_stats(owner_id=owner_id)
+
+
+def show():
+    user = st.session_state.get("user", {})
+    st.title("✨ Dashboard")
+    st.markdown(f"Welcome back, **{user.get('name', '')}** — your social media command center.")
+
+    stats   = _get_user_stats()
+    clients = _get_user_clients()
 
     # ── Stat Cards ────────────────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
@@ -33,13 +48,13 @@ def show():
         st.markdown("**Train the AI**")
         st.markdown("Upload good, bad, and used caption examples.")
         if st.button("📚 Add Examples", use_container_width=True):
-            st.session_state["nav_override"] = "Caption Examples"
+            st.session_state["nav_override"] = "Examples"
             st.rerun()
     with qa3:
         st.markdown("**Generate Captions**")
         st.markdown("Describe your batch and get captions instantly.")
         if st.button("🚀 Generate Now", use_container_width=True, type="primary"):
-            st.session_state["nav_override"] = "Generate Captions"
+            st.session_state["nav_override"] = "Generate"
             st.rerun()
 
     st.divider()
@@ -51,7 +66,7 @@ def show():
     recent = stats.get("recent_generations", [])
 
     if not recent:
-        st.info("No captions generated yet. Head to **Generate Captions** to get started!")
+        st.info("No captions generated yet. Head to **Generate** to get started!")
     else:
         client_id_map = {c["name"]: c["id"] for c in clients}
 
